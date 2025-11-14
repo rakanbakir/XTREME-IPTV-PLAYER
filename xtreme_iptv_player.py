@@ -19,16 +19,16 @@ from lxml import etree
 from datetime import datetime
 from dateutil import parser, tz
 import xml.etree.ElementTree as ET
-from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtCore import (
-    Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize, QObject, pyqtSignal, QRunnable, pyqtSlot, QThreadPool, QDir
-)
+from PyQt5.QtGui import QIcon, QKeySequence, QFont
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from PyQt5.QtMultimediaWidgets import QVideoWidget
+from PyQt5.QtCore import QUrl, QObject, pyqtSignal, QRunnable, pyqtSlot, QThreadPool, Qt, QSize, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QLineEdit, QLabel, QPushButton,
     QListWidget, QWidget, QFileDialog, QCheckBox, QSizePolicy, QHBoxLayout,
     QDialog, QFormLayout, QDialogButtonBox, QTabWidget, QListWidgetItem,
-    QSpinBox, QMenu, QAction, QTextEdit, 
+    QSpinBox, QMenu, QAction, QTextEdit, QSlider, QShortcut,
 )
 
 is_windows = sys.platform.startswith('win')
@@ -332,12 +332,13 @@ class IPTVPlayerApp(QMainWindow):
             'Series': []
         }
         self.favorites = {}  # Store favorite entries by their ID
-        self.external_player_command = ""
-        self.load_external_player_command()
         self.load_favorites()
 
         self.watch_later_dir = Path.home() / '.iptv' / 'watch_later'
         os.makedirs(self.watch_later_dir, exist_ok=True)
+
+        # Playback positions for resume
+        self.playback_positions = self.load_playback_positions()
 
         self.top_level_scroll_positions = {
             'LIVE': 0,
@@ -420,14 +421,9 @@ class IPTVPlayerApp(QMainWindow):
         self.address_book_button.setToolTip("Manage Saved Credentials")
         self.address_book_button.clicked.connect(self.open_address_book)
 
-        self.choose_player_button = QPushButton("Choose Media Player")
-        self.choose_player_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay))
-        self.choose_player_button.clicked.connect(self.choose_external_player)
-
         buttons_layout.addWidget(self.login_button)
         buttons_layout.addWidget(self.m3u_plus_button)
         buttons_layout.addWidget(self.address_book_button)
-        buttons_layout.addWidget(self.choose_player_button)
 
         checkbox_layout = QHBoxLayout()
         checkbox_layout.setAlignment(Qt.AlignRight)
@@ -452,6 +448,12 @@ class IPTVPlayerApp(QMainWindow):
         self.dark_theme_checkbox.setToolTip("Enable or disable dark theme")
         self.dark_theme_checkbox.stateChanged.connect(self.toggle_dark_theme)
         checkbox_layout.addWidget(self.dark_theme_checkbox)
+
+        # **Add Debug Mode Checkbox**
+        self.debug_checkbox = QCheckBox("Debug Mode")
+        self.debug_checkbox.setToolTip("Enable debug mode with logging and prints")
+        self.debug_checkbox.stateChanged.connect(self.toggle_debug)
+        checkbox_layout.addWidget(self.debug_checkbox)
 
         self.font_size_label = QLabel("Font Size:")
         self.font_size_spinbox = QSpinBox()
@@ -492,6 +494,81 @@ class IPTVPlayerApp(QMainWindow):
         self.tab_widget.addTab(self.movies_tab, movies_icon, "Movies")
         self.tab_widget.addTab(self.series_tab, series_icon, "Series")
         self.tab_widget.addTab(self.favorites_tab, self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon), "Favorites")
+
+        # Add Player tab
+        self.player_tab = QWidget()
+        self.player_layout = QVBoxLayout(self.player_tab)
+        self.video_widget = QVideoWidget()
+        self.player_layout.addWidget(self.video_widget)
+        
+        # Add control bar
+        self.control_layout = QHBoxLayout()
+        
+        self.rewind_button = QPushButton("<<")
+        self.rewind_button.setToolTip("Rewind 10 seconds")
+        self.rewind_button.clicked.connect(self.rewind)
+        self.control_layout.addWidget(self.rewind_button)
+        
+        self.play_pause_button = QPushButton("Play")
+        self.play_pause_button.setToolTip("Play or pause the video")
+        self.play_pause_button.clicked.connect(self.toggle_play_pause)
+        self.control_layout.addWidget(self.play_pause_button)
+        
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setToolTip("Stop playback")
+        self.stop_button.clicked.connect(self.stop_playback)
+        self.control_layout.addWidget(self.stop_button)
+        
+        self.forward_button = QPushButton(">>")
+        self.forward_button.setToolTip("Forward 10 seconds")
+        self.forward_button.clicked.connect(self.forward)
+        self.control_layout.addWidget(self.forward_button)
+        
+        self.position_slider = QSlider(Qt.Horizontal)
+        self.position_slider.setToolTip("Seek to a position in the video")
+        self.position_slider.setRange(0, 0)
+        self.position_slider.sliderMoved.connect(self.set_position)
+        self.control_layout.addWidget(self.position_slider)
+        
+        self.current_time_label = QLabel("00:00")
+        self.current_time_label.setToolTip("Current playback time")
+        self.control_layout.addWidget(self.current_time_label)
+        
+        self.total_time_label = QLabel("/ 00:00")
+        self.total_time_label.setToolTip("Total video duration")
+        self.control_layout.addWidget(self.total_time_label)
+        
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setToolTip("Adjust volume (Ctrl+Up/Down for keyboard control)")
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(50)
+        self.volume_slider.valueChanged.connect(self.set_volume)
+        self.control_layout.addWidget(self.volume_slider)
+        
+        self.volume_label = QLabel("50%")
+        self.volume_label.setToolTip("Current volume percentage")
+        self.control_layout.addWidget(self.volume_label)
+        
+        self.mute_button = QPushButton("Mute")
+        self.mute_button.setToolTip("Toggle mute")
+        self.mute_button.clicked.connect(self.toggle_mute)
+        self.control_layout.addWidget(self.mute_button)
+        
+        self.player_layout.addLayout(self.control_layout)
+        
+        self.media_player = QMediaPlayer()
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.setVolume(50)
+        self.previous_volume = 50
+        self.media_player.stateChanged.connect(self.update_play_pause_button)
+        self.media_player.durationChanged.connect(self.update_duration)
+        self.media_player.positionChanged.connect(self.update_position)
+        
+        # Timer to save positions periodically
+        self.save_timer = QTimer()
+        self.save_timer.timeout.connect(self.save_playback_positions)
+        self.save_timer.start(5000)  # Save every 5 seconds
+        self.tab_widget.addTab(self.player_tab, self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay), "Player")
 
         self.live_layout = QVBoxLayout(self.live_tab)
         self.movies_layout = QVBoxLayout(self.movies_tab)
@@ -600,6 +677,17 @@ class IPTVPlayerApp(QMainWindow):
         self.load_theme_preference()
         self.load_default_credentials()
 
+        self.load_debug_preference()
+
+        if self.debug:
+            os.environ['QT_LOGGING_RULES'] = 'qt.*=true'
+
+        # Connect keyboard shortcuts for volume
+        self.shortcut_vol_up = QShortcut(QKeySequence("Ctrl+Up"), self)
+        self.shortcut_vol_up.activated.connect(self.volume_up)
+        self.shortcut_vol_down = QShortcut(QKeySequence("Ctrl+Down"), self)
+        self.shortcut_vol_down.activated.connect(self.volume_down)
+
     
 
     def toggle_dark_theme(self, state):
@@ -648,6 +736,14 @@ class IPTVPlayerApp(QMainWindow):
 
             
 
+    def toggle_debug(self, state):
+        self.debug = (state == Qt.Checked)
+        self.save_debug_preference(debug=self.debug)
+        if self.debug:
+            os.environ['QT_LOGGING_RULES'] = 'qt.*=true'
+        else:
+            os.environ.pop('QT_LOGGING_RULES', None)
+
     def load_theme_preference(self):
         
         config = configparser.RawConfigParser()
@@ -661,6 +757,14 @@ class IPTVPlayerApp(QMainWindow):
         else:
             self.dark_theme_checkbox.setChecked(False)
             QApplication.instance().setStyleSheet("")
+
+    def load_debug_preference(self):
+        config = configparser.RawConfigParser()
+        config.read('config.ini')
+        self.debug = False
+        if 'Debug' in config:
+            self.debug = config['Debug'].getboolean('enabled', fallback=False)
+        self.debug_checkbox.setChecked(self.debug)
 
     def load_default_credentials(self):
         """Load the first saved credential into the login fields on startup and auto-login."""
@@ -680,17 +784,78 @@ class IPTVPlayerApp(QMainWindow):
                 self.extract_credentials_from_m3u_plus_url(m3u_url)
                 self.login()
 
-    def save_theme_preference(self, dark):
-        """
-        Save the theme preference to config.ini.
-        """
+    def load_playback_positions(self):
         config = configparser.RawConfigParser()
-        config.read('config.ini')
+        try:
+            config.read('config.ini')
+        except configparser.Error:
+            return {}
+        if 'PlaybackPositions' in config:
+            positions_json = config['PlaybackPositions'].get('positions', '{}')
+            try:
+                return json.loads(positions_json)
+            except json.JSONDecodeError:
+                return {}
+        return {}
+
+    def save_current_position(self, url, position):
+        self.playback_positions[url] = position
+        if self.debug:
+            print(f"DEBUG: Saved position for {url}: {position} ms")
+
+    def save_playback_positions(self):
+        config = configparser.RawConfigParser()
+        try:
+            config.read('config.ini')
+        except configparser.Error:
+            # If config is corrupted, start fresh
+            config = configparser.RawConfigParser()
+        if 'PlaybackPositions' not in config:
+            config['PlaybackPositions'] = {}
+        config['PlaybackPositions']['positions'] = json.dumps(self.playback_positions)
+        # Write to temp file and rename
+        import tempfile
+        import os
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, dir='.') as temp_file:
+            config.write(temp_file)
+            temp_file.flush()
+            os.rename(temp_file.name, 'config.ini')
+        if self.debug:
+            print(f"DEBUG: Saved {len(self.playback_positions)} playback positions to config")
+
+    def save_debug_preference(self, debug):
+        config = configparser.RawConfigParser()
+        try:
+            config.read('config.ini')
+        except configparser.Error:
+            config = configparser.RawConfigParser()
+        if 'Debug' not in config:
+            config['Debug'] = {}
+        config['Debug']['enabled'] = 'true' if debug else 'false'
+        # Write to temp file and rename
+        import tempfile
+        import os
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, dir='.') as temp_file:
+            config.write(temp_file)
+            temp_file.flush()
+            os.rename(temp_file.name, 'config.ini')
+
+    def save_theme_preference(self, dark):
+        config = configparser.RawConfigParser()
+        try:
+            config.read('config.ini')
+        except configparser.Error:
+            config = configparser.RawConfigParser()
         if 'Theme' not in config:
             config['Theme'] = {}
-        config['Theme']['Dark'] = str(dark)
-        with open('config.ini', 'w') as config_file:
-            config.write(config_file)
+        config['Theme']['Dark'] = 'true' if dark else 'false'
+        # Write to temp file and rename
+        import tempfile
+        import os
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, dir='.') as temp_file:
+            config.write(temp_file)
+            temp_file.flush()
+            os.rename(temp_file.name, 'config.ini')
 
     def add_search_icon(self, search_bar):
         search_icon = QIcon.fromTheme("edit-find")
@@ -1869,23 +2034,101 @@ class IPTVPlayerApp(QMainWindow):
                 self.animate_progress(0, 100, "Stream URL not found")
                 return
 
-            if self.external_player_command:
-                user_agent = "AppleCoreMedia/1.0.0.20L563 (Apple TV; U; CPU OS 16_5 like Mac OS X; en_us)"
-                command = [self.external_player_command, '--user-agent=' + user_agent, '--save-position-on-quit', '--watch-later-dir=' + str(self.watch_later_dir), stream_url]
+            if self.debug:
+                print(f"DEBUG: Playing channel: {entry.get('name', 'Unknown')} - URL: {stream_url}")
 
-                if is_linux:
-                    # Ensure the external player command is executable
-                    if not os.access(self.external_player_command, os.X_OK):
-                        self.animate_progress(0, 100, "Selected player is not executable")
-                        return
-
-                subprocess.Popen(command)
-            else:
-                self.animate_progress(0, 100, "No external player configured")
-        except OSError as e:
-            QtWidgets.QMessageBox.warning(self, "Playback Error", f"Failed to start media player: {e}")
+            # Use internal player
+            self.media_player.setMedia(QMediaContent(QUrl(stream_url)))
+            
+            # Resume from saved position
+            if stream_url in self.playback_positions:
+                position = self.playback_positions[stream_url]
+                self.media_player.setPosition(position)
+                if self.debug:
+                    print(f"DEBUG: Resuming from position: {position} ms")
+            
+            self.media_player.play()
+            self.tab_widget.setCurrentWidget(self.player_tab)
+            
+            # Connect to save position on stop
+            self.media_player.positionChanged.connect(lambda pos: self.save_current_position(stream_url, pos))
+            
+            if self.debug:
+                print("DEBUG: Playback started, switched to Player tab")
+            
         except Exception as e:
+            if self.debug:
+                print(f"DEBUG: Error in play_channel: {e}")
             QtWidgets.QMessageBox.warning(self, "Playback Error", f"Error playing channel: {e}")
+
+    def toggle_play_pause(self):
+        if self.media_player.state() == QMediaPlayer.PlayingState:
+            self.media_player.pause()
+        else:
+            self.media_player.play()
+
+    def stop_playback(self):
+        self.media_player.stop()
+
+    def rewind(self):
+        current_pos = self.media_player.position()
+        new_pos = max(0, current_pos - 10000)  # Rewind 10 seconds
+        self.media_player.setPosition(new_pos)
+
+    def forward(self):
+        current_pos = self.media_player.position()
+        duration = self.media_player.duration()
+        new_pos = min(duration, current_pos + 10000)  # Forward 10 seconds
+        self.media_player.setPosition(new_pos)
+
+    def set_position(self, position):
+        self.media_player.setPosition(position)
+
+    def set_volume(self, volume):
+        self.media_player.setVolume(volume)
+        self.volume_slider.setValue(volume)
+        self.volume_label.setText(f"{volume}%")
+        if volume > 0:
+            self.previous_volume = volume
+        if self.debug:
+            print(f"DEBUG: Volume set to {volume}")
+
+    def volume_up(self):
+        current = self.media_player.volume()
+        new_vol = min(100, current + 10)
+        self.set_volume(new_vol)
+
+    def volume_down(self):
+        current = self.media_player.volume()
+        new_vol = max(0, current - 10)
+        self.set_volume(new_vol)
+
+    def toggle_mute(self):
+        if self.media_player.volume() > 0:
+            self.previous_volume = self.media_player.volume()
+            self.set_volume(0)
+        else:
+            self.set_volume(self.previous_volume)
+
+    def update_play_pause_button(self, state):
+        if state == QMediaPlayer.PlayingState:
+            self.play_pause_button.setText("Pause")
+        else:
+            self.play_pause_button.setText("Play")
+
+    def update_duration(self, duration):
+        self.position_slider.setRange(0, duration)
+        self.total_time_label.setText(f"/ {self.format_time(duration)}")
+
+    def update_position(self, position):
+        self.position_slider.setValue(position)
+        self.current_time_label.setText(self.format_time(position))
+
+    def format_time(self, ms):
+        seconds = ms // 1000
+        minutes = seconds // 60
+        seconds %= 60
+        return f"{minutes:02d}:{seconds:02d}"
 
 
 
@@ -1902,6 +2145,9 @@ class IPTVPlayerApp(QMainWindow):
 
             if tab_name == "Favorites":
                 self.show_favorites()
+                return
+
+            if tab_name == "Player":
                 return
 
             if self.login_type == 'xtream':
@@ -2236,21 +2482,6 @@ class IPTVPlayerApp(QMainWindow):
     def get_list_widget(self, tab_name):
         return self.list_widgets.get(tab_name)
 
-    def load_external_player_command(self):
-        config = configparser.RawConfigParser()
-        config.read('config.ini')
-        if 'ExternalPlayer' in config:
-            self.external_player_command = config['ExternalPlayer'].get('Command', '')
-        if not self.external_player_command:
-            self.external_player_command = '/usr/bin/mpv'
-            self.save_external_player_command()
-
-    def save_external_player_command(self):
-        config = configparser.RawConfigParser()
-        config['ExternalPlayer'] = {'Command': self.external_player_command}
-        with open('config.ini', 'w') as config_file:
-            config.write(config_file)
-
     def load_favorites(self):
         config = configparser.RawConfigParser()
         config.read('config.ini')
@@ -2331,7 +2562,6 @@ class IPTVPlayerApp(QMainWindow):
         dialog.exec_()
 
 def main():
-    os.environ['QT_LOGGING_RULES'] = '*.warning=false'
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     app.setFont(QFont("Arial", 10))
