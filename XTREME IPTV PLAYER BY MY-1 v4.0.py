@@ -657,7 +657,7 @@ class IPTVPlayerApp(QMainWindow):
             QApplication.instance().setStyleSheet("")
 
     def load_default_credentials(self):
-        """Load the first saved credential into the login fields on startup."""
+        """Load the first saved credential into the login fields on startup and auto-login."""
         config = configparser.ConfigParser()
         config.read('credentials.ini')
         if 'Credentials' in config and config['Credentials']:
@@ -668,9 +668,11 @@ class IPTVPlayerApp(QMainWindow):
                 self.server_entry.setText(server)
                 self.username_entry.setText(username)
                 self.password_entry.setText(password)
+                self.login()
             elif data.startswith('m3u_plus|'):
                 _, m3u_url = data.split('|', 1)
                 self.extract_credentials_from_m3u_plus_url(m3u_url)
+                self.login()
 
     def save_theme_preference(self, dark):
         """
