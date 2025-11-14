@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 from PyQt5.QtGui import QIcon, QKeySequence, QFont
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
-from PyQt5.QtCore import QUrl, QObject, pyqtSignal, QRunnable, pyqtSlot, QThreadPool, Qt, QSize, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import QUrl, QObject, pyqtSignal, QRunnable, pyqtSlot, QThreadPool, Qt, QSize, QTimer, QPropertyAnimation, QEasingCurve, QDir, QEvent
 from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QLineEdit, QLabel, QPushButton,
@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
     QDialog, QFormLayout, QDialogButtonBox, QTabWidget, QListWidgetItem,
     QSpinBox, QMenu, QAction, QTextEdit, QSlider, QShortcut,
 )
+from PyQt5.QtCore import QDir
 
 is_windows = sys.platform.startswith('win')
 is_mac = sys.platform.startswith('darwin')
@@ -364,6 +365,12 @@ class IPTVPlayerApp(QMainWindow):
         self.movies_channel_icon = self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon)
         self.series_channel_icon = self.style().standardIcon(QtWidgets.QStyle.SP_DirIcon)
 
+        # Full screen video window
+        self.fullscreen_window = None
+        self.cursor_timer = QTimer()
+        self.cursor_timer.timeout.connect(self.hide_cursor)
+        self.cursor_visible = True
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
@@ -499,6 +506,7 @@ class IPTVPlayerApp(QMainWindow):
         self.player_tab = QWidget()
         self.player_layout = QVBoxLayout(self.player_tab)
         self.video_widget = QVideoWidget()
+        self.video_widget.installEventFilter(self)
         self.player_layout.addWidget(self.video_widget)
         
         # Add control bar
@@ -553,6 +561,11 @@ class IPTVPlayerApp(QMainWindow):
         self.mute_button.setToolTip("Toggle mute")
         self.mute_button.clicked.connect(self.toggle_mute)
         self.control_layout.addWidget(self.mute_button)
+        
+        self.fullscreen_button = QPushButton("⛶")
+        self.fullscreen_button.setToolTip("Toggle fullscreen")
+        self.fullscreen_button.clicked.connect(self.toggle_fullscreen)
+        self.control_layout.addWidget(self.fullscreen_button)
         
         self.player_layout.addLayout(self.control_layout)
         
@@ -2112,6 +2125,82 @@ class IPTVPlayerApp(QMainWindow):
             self.set_volume(0)
         else:
             self.set_volume(self.previous_volume)
+
+    def toggle_fullscreen(self):
+        if self.fullscreen_window is None:
+            # Create full screen window
+            self.fullscreen_window = QWidget()
+            self.fullscreen_window.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+            self.fullscreen_window.setWindowState(Qt.WindowFullScreen)
+            self.fullscreen_window.setStyleSheet("background-color: black;")
+            
+            # Create layout for full screen window
+            fullscreen_layout = QVBoxLayout(self.fullscreen_window)
+            fullscreen_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Move video widget to full screen window
+            self.player_layout.removeWidget(self.video_widget)
+            fullscreen_layout.addWidget(self.video_widget)
+            
+            # Add escape key to exit full screen
+            self.escape_shortcut = QShortcut(QKeySequence("Escape"), self.fullscreen_window)
+            self.escape_shortcut.activated.connect(self.exit_fullscreen)
+            
+            # Install event filter for mouse tracking
+            self.fullscreen_window.installEventFilter(self)
+            
+            self.fullscreen_window.show()
+            self.fullscreen_button.setText("⛶")
+            
+            # Start cursor hide timer
+            self.cursor_visible = True
+            self.cursor_timer.start(2000)  # 2 seconds
+        else:
+            self.exit_fullscreen()
+
+    def exit_fullscreen(self):
+        if self.fullscreen_window is not None:
+            # Stop cursor timer
+            self.cursor_timer.stop()
+            self.show_cursor()
+            
+            # Remove escape shortcut before closing window
+            if hasattr(self, 'escape_shortcut') and self.escape_shortcut:
+                try:
+                    self.escape_shortcut.setParent(None)
+                except RuntimeError:
+                    pass  # Shortcut already deleted
+                self.escape_shortcut = None
+            
+            # Move video widget back to player tab
+            self.fullscreen_window.layout().removeWidget(self.video_widget)
+            self.player_layout.insertWidget(0, self.video_widget)
+            
+            # Close full screen window
+            self.fullscreen_window.close()
+            self.fullscreen_window = None
+            
+            self.fullscreen_button.setText("⛶")
+
+    def hide_cursor(self):
+        if self.fullscreen_window and self.cursor_visible:
+            self.fullscreen_window.setCursor(Qt.BlankCursor)
+            self.cursor_visible = False
+
+    def show_cursor(self):
+        if self.fullscreen_window and not self.cursor_visible:
+            self.fullscreen_window.setCursor(Qt.ArrowCursor)
+            self.cursor_visible = True
+
+    def eventFilter(self, obj, event):
+        if obj == self.fullscreen_window and event.type() == QtCore.QEvent.MouseMove:
+            # Show cursor and restart timer on mouse movement
+            self.show_cursor()
+            self.cursor_timer.start(2000)  # 2 seconds
+        elif obj == self.video_widget and event.type() == QEvent.MouseButtonDblClick:
+            self.toggle_fullscreen()
+            return True
+        return super().eventFilter(obj, event)
 
     def update_play_pause_button(self, state):
         if state == QMediaPlayer.PlayingState:
