@@ -1802,7 +1802,10 @@ class IPTVPlayerApp(QMainWindow):
                 items.append(itm)
 
             # alphabetical order
-            items.sort(key=lambda x: x.text())
+            if tab_name in ('Movies', 'Series'):
+                items.sort(key=lambda x: -int(x.data(Qt.UserRole).get("added" if tab_name == "Movies" else "last_modified", 0)))
+            else:
+                items.sort(key=lambda x: x.text())
             for itm in items:
                 list_widget.addItem(itm)
 
@@ -1870,7 +1873,7 @@ class IPTVPlayerApp(QMainWindow):
                 item.setIcon(self.series_channel_icon)
                 items.append(item)
 
-            items.sort(key=lambda x: x.text())
+            items.sort(key=lambda x: -int(x.data(Qt.UserRole).get("last_modified", 0)))
             for item in items:
                 list_widget.addItem(item)
 
@@ -2266,29 +2269,87 @@ class IPTVPlayerApp(QMainWindow):
         sort_action.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ArrowUp))
         sort_action.triggered.connect(lambda: self.sort_channel_list(sender))
         menu.addAction(sort_action)
+
+        # Add sort by latest added for Movies and Series
+        current_tab = self.tab_widget.tabText(self.tab_widget.currentIndex())
+        if current_tab in ['Movies', 'Series']:
+            sort_latest_action = QAction("Sort by Latest Added", self)
+            sort_latest_action.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ArrowDown))
+            sort_latest_action.triggered.connect(lambda: self.sort_by_latest_added(sender))
+            menu.addAction(sort_latest_action)
+
         menu.exec_(sender.viewport().mapToGlobal(position))
 
     def sort_channel_list(self, list_widget):
         try:
-            items = []
+            current_tab = self.tab_widget.tabText(self.tab_widget.currentIndex())
+            items_data = []
             for i in range(list_widget.count()):
                 item = list_widget.item(i)
-                if item.text() != "Go Back":
-                    items.append(item)
+                if item and item.text() != "Go Back":
+                    items_data.append({
+                        'text': item.text(),
+                        'data': item.data(Qt.UserRole),
+                        'icon': item.icon()
+                    })
 
-            items.sort(key=lambda x: x.text())
+            items_data.sort(key=lambda x: x['text'].lower())
             list_widget.clear()
 
-            current_tab = self.tab_widget.tabText(self.tab_widget.currentIndex())
             if self.navigation_stacks[current_tab]:
                 go_back_item = QListWidgetItem("Go Back")
                 go_back_item.setIcon(self.go_back_icon)
                 list_widget.addItem(go_back_item)
 
-            for item in items:
-                list_widget.addItem(item)
+            for data in items_data:
+                new_item = QListWidgetItem(data['text'])
+                new_item.setData(Qt.UserRole, data['data'])
+                new_item.setIcon(data['icon'])
+                list_widget.addItem(new_item)
         except Exception as e:
             print(f"Error sorting channel list: {e}")
+
+    def sort_by_latest_added(self, list_widget):
+        try:
+            current_tab = self.tab_widget.tabText(self.tab_widget.currentIndex())
+            if current_tab not in ['Movies', 'Series']:
+                return
+
+            items_data = []
+            for i in range(list_widget.count()):
+                item = list_widget.item(i)
+                if item and item.text() != "Go Back":
+                    items_data.append({
+                        'text': item.text(),
+                        'data': item.data(Qt.UserRole),
+                        'icon': item.icon()
+                    })
+
+            # Sort by date added descending
+            def get_sort_key(data):
+                entry = data['data']
+                if not entry or not isinstance(entry, dict):
+                    return 0
+                if current_tab == 'Movies':
+                    return -int(entry.get("added", 0))  # Negative for descending
+                elif current_tab == 'Series':
+                    return -int(entry.get("last_modified", 0))
+
+            items_data.sort(key=get_sort_key)
+            list_widget.clear()
+
+            if self.navigation_stacks[current_tab]:
+                go_back_item = QListWidgetItem("Go Back")
+                go_back_item.setIcon(self.go_back_icon)
+                list_widget.addItem(go_back_item)
+
+            for data in items_data:
+                new_item = QListWidgetItem(data['text'])
+                new_item.setData(Qt.UserRole, data['data'])
+                new_item.setIcon(data['icon'])
+                list_widget.addItem(new_item)
+        except Exception as e:
+            print(f"Error sorting by latest added: {e}")
 
     def search_in_list(self, tab_name, text):
         """
