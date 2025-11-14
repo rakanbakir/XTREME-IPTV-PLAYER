@@ -327,8 +327,10 @@ class IPTVPlayerApp(QMainWindow):
             'Movies': [],
             'Series': []
         }
+        self.favorites = {}  # Store favorite entries by their ID
         self.external_player_command = ""
         self.load_external_player_command()
+        self.load_favorites()
 
         self.top_level_scroll_positions = {
             'LIVE': 0,
@@ -477,14 +479,17 @@ class IPTVPlayerApp(QMainWindow):
         self.live_tab = QWidget()
         self.movies_tab = QWidget()
         self.series_tab = QWidget()
+        self.favorites_tab = QWidget()
 
         self.tab_widget.addTab(self.live_tab, live_icon, "LIVE")
         self.tab_widget.addTab(self.movies_tab, movies_icon, "Movies")
         self.tab_widget.addTab(self.series_tab, series_icon, "Series")
+        self.tab_widget.addTab(self.favorites_tab, self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon), "Favorites")
 
         self.live_layout = QVBoxLayout(self.live_tab)
         self.movies_layout = QVBoxLayout(self.movies_tab)
         self.series_layout = QVBoxLayout(self.series_tab)
+        self.favorites_layout = QVBoxLayout(self.favorites_tab)
 
         self.search_bar_live = QLineEdit()
         self.search_bar_live.setPlaceholderText("Search Live Channels...")
@@ -504,23 +509,31 @@ class IPTVPlayerApp(QMainWindow):
         self.add_search_icon(self.search_bar_series)
         self.search_bar_series.textChanged.connect(lambda text: self.search_in_list('Series', text))
 
+        self.search_bar_favorites = QLineEdit()
+        self.search_bar_favorites.setPlaceholderText("Search Favorites...")
+        self.search_bar_favorites.setClearButtonEnabled(True)
+        self.add_search_icon(self.search_bar_favorites)
+        self.search_bar_favorites.textChanged.connect(lambda text: self.search_in_list('Favorites', text))
+
         self.add_search_bar(self.live_layout, self.search_bar_live)
         self.add_search_bar(self.movies_layout, self.search_bar_movies)
         self.add_search_bar(self.series_layout, self.search_bar_series)
+        self.add_search_bar(self.favorites_layout, self.search_bar_favorites)
 
         self.channel_list_live = QListWidget()
         self.channel_list_movies = QListWidget()
         self.channel_list_series = QListWidget()
+        self.channel_list_favorites = QListWidget()
         
         
         standard_icon_size = QSize(24, 24)
 
         # 🟢 Install event filter for tooltip detection
-        for widget in [self.channel_list_live, self.channel_list_movies, self.channel_list_series]:
+        for widget in [self.channel_list_live, self.channel_list_movies, self.channel_list_series, self.channel_list_favorites]:
             widget.viewport().installEventFilter(self)
         
         
-        for list_widget in [self.channel_list_live, self.channel_list_movies, self.channel_list_series]:
+        for list_widget in [self.channel_list_live, self.channel_list_movies, self.channel_list_series, self.channel_list_favorites]:
             list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             list_widget.setIconSize(standard_icon_size)
             list_widget.setStyleSheet("""
@@ -533,17 +546,25 @@ class IPTVPlayerApp(QMainWindow):
         self.live_layout.addWidget(self.channel_list_live)
         self.movies_layout.addWidget(self.channel_list_movies)
         self.series_layout.addWidget(self.channel_list_series)
+        self.favorites_layout.addWidget(self.channel_list_favorites)
 
         self.list_widgets = {
             'LIVE': self.channel_list_live,
             'Movies': self.channel_list_movies,
             'Series': self.channel_list_series,
+            'Favorites': self.channel_list_favorites,
         }
         
         self.tab_widget.currentChanged.connect(self.on_tab_change)
         self.channel_list_live.itemDoubleClicked.connect(self.channel_item_double_clicked)
         self.channel_list_movies.itemDoubleClicked.connect(self.channel_item_double_clicked)
         self.channel_list_series.itemDoubleClicked.connect(self.channel_item_double_clicked)
+        self.channel_list_favorites.itemDoubleClicked.connect(self.channel_item_double_clicked)
+
+        # Connect context menus
+        for list_widget in [self.channel_list_live, self.channel_list_movies, self.channel_list_series, self.channel_list_favorites]:
+            list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+            list_widget.customContextMenuRequested.connect(self.show_context_menu)
 
         self.info_tab = QWidget()
         self.info_tab_layout = QVBoxLayout(self.info_tab)
@@ -571,6 +592,7 @@ class IPTVPlayerApp(QMainWindow):
         self.playlist_progress_animation.setEasingCurve(QEasingCurve.InOutQuad)
 
         self.load_theme_preference()
+        self.load_default_credentials()
 
     
 
@@ -622,7 +644,7 @@ class IPTVPlayerApp(QMainWindow):
 
     def load_theme_preference(self):
         
-        config = configparser.ConfigParser()
+        config = configparser.RawConfigParser()
         config.read('config.ini')
         dark = False
         if 'Theme' in config:
@@ -634,11 +656,27 @@ class IPTVPlayerApp(QMainWindow):
             self.dark_theme_checkbox.setChecked(False)
             QApplication.instance().setStyleSheet("")
 
+    def load_default_credentials(self):
+        """Load the first saved credential into the login fields on startup."""
+        config = configparser.ConfigParser()
+        config.read('credentials.ini')
+        if 'Credentials' in config and config['Credentials']:
+            first_name = next(iter(config['Credentials']))
+            data = config['Credentials'][first_name]
+            if data.startswith('manual|'):
+                _, server, username, password = data.split('|')
+                self.server_entry.setText(server)
+                self.username_entry.setText(username)
+                self.password_entry.setText(password)
+            elif data.startswith('m3u_plus|'):
+                _, m3u_url = data.split('|', 1)
+                self.extract_credentials_from_m3u_plus_url(m3u_url)
+
     def save_theme_preference(self, dark):
         """
         Save the theme preference to config.ini.
         """
-        config = configparser.ConfigParser()
+        config = configparser.RawConfigParser()
         config.read('config.ini')
         if 'Theme' not in config:
             config['Theme'] = {}
@@ -911,7 +949,8 @@ class IPTVPlayerApp(QMainWindow):
             category = {
                 self.channel_list_live: 'LIVE',
                 self.channel_list_movies: 'Movies',
-                self.channel_list_series: 'Series'
+                self.channel_list_series: 'Series',
+                self.channel_list_favorites: 'Favorites'
             }.get(sender)
 
             if not category:
@@ -922,6 +961,14 @@ class IPTVPlayerApp(QMainWindow):
                 return
 
             selected_text = selected_item.text()
+
+            if category == 'Favorites':
+                # Favorites don't have navigation, just play
+                selected_entry = selected_item.data(Qt.UserRole)
+                if selected_entry and "url" in selected_entry:
+                    self.play_channel(selected_entry)
+                return
+
             list_widget = self.get_list_widget(category)
             current_scroll_position = list_widget.verticalScrollBar().value()
             stack = self.navigation_stacks[category]
@@ -1064,6 +1111,12 @@ class IPTVPlayerApp(QMainWindow):
         try:
             list_widget = self.get_list_widget(tab_name)
             stack = self.navigation_stacks[tab_name]
+
+            if tab_name == 'Favorites':
+                selected_entry = selected_item.data(Qt.UserRole)
+                if selected_entry and "url" in selected_entry:
+                    self.play_channel(selected_entry)
+                return
 
             if selected_text == "Go Back":
                 if stack:
@@ -1795,8 +1848,8 @@ class IPTVPlayerApp(QMainWindow):
                 return
 
             if self.external_player_command:
-                user_agent_argument = f":http-user-agent=AppleCoreMedia/1.0.0.20L563 (Apple TV; U; CPU OS 16_5 like Mac OS X; en_us)"
-                command = [self.external_player_command, stream_url, user_agent_argument]
+                user_agent = "AppleCoreMedia/1.0.0.20L563 (Apple TV; U; CPU OS 16_5 like Mac OS X; en_us)"
+                command = [self.external_player_command, '--user-agent=' + user_agent, stream_url]
 
                 if is_linux:
                     # Ensure the external player command is executable
@@ -1822,6 +1875,10 @@ class IPTVPlayerApp(QMainWindow):
                     self.result_display.clear()
                     self.result_display.setText("Ready to fetch and display data.")
                     self.info_tab_initialized = True
+                return
+
+            if tab_name == "Favorites":
+                self.show_favorites()
                 return
 
             if self.login_type == 'xtream':
@@ -1920,6 +1977,22 @@ class IPTVPlayerApp(QMainWindow):
     def show_context_menu(self, position):
         sender = self.sender()
         menu = QMenu()
+        
+        # Get the current item
+        item = sender.itemAt(position)
+        if item and item.text() != "Go Back":
+            # Create unique identifier for the item
+            entry = item.data(Qt.UserRole)
+            if entry:
+                item_id = self.get_item_id(entry)
+                is_favorite = item_id in self.favorites
+                
+                favorite_action = QAction("Remove from Favorites" if is_favorite else "Add to Favorites", self)
+                favorite_action.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon))
+                favorite_action.triggered.connect(lambda: self.toggle_favorite(entry))
+                menu.addAction(favorite_action)
+                menu.addSeparator()
+        
         sort_action = QAction("Sort Alphabetically", self)
         sort_action.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ArrowUp))
         sort_action.triggered.connect(lambda: self.sort_channel_list(sender))
@@ -1964,6 +2037,29 @@ class IPTVPlayerApp(QMainWindow):
 
         # Trim leading/trailing spaces
         text = text.strip()
+
+        if tab_name == 'Favorites':
+            list_widget.clear()
+            if not text:
+                self.show_favorites()
+                return
+            filtered_items = []
+            for item_id, entry in self.favorites.items():
+                name = entry.get('name', '')
+                if text.lower() in name.lower():
+                    item = QListWidgetItem(name)
+                    item.setData(Qt.UserRole, entry)
+                    item.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon))
+                    filtered_items.append(item)
+            if not filtered_items:
+                not_found_item = QListWidgetItem("Not Found")
+                not_found_item.setFlags(not_found_item.flags() & ~Qt.ItemIsSelectable & ~Qt.ItemIsEnabled)
+                list_widget.addItem(not_found_item)
+            else:
+                filtered_items.sort(key=lambda x: x.text().lower())
+                for item in filtered_items:
+                    list_widget.addItem(item)
+            return
 
         # 1) If the search bar is cleared => revert to original view
         if not text:
@@ -2118,16 +2214,85 @@ class IPTVPlayerApp(QMainWindow):
         return self.list_widgets.get(tab_name)
 
     def load_external_player_command(self):
-        config = configparser.ConfigParser()
+        config = configparser.RawConfigParser()
         config.read('config.ini')
         if 'ExternalPlayer' in config:
             self.external_player_command = config['ExternalPlayer'].get('Command', '')
+        if not self.external_player_command:
+            self.external_player_command = '/usr/bin/mpv'
+            self.save_external_player_command()
 
     def save_external_player_command(self):
-        config = configparser.ConfigParser()
+        config = configparser.RawConfigParser()
         config['ExternalPlayer'] = {'Command': self.external_player_command}
         with open('config.ini', 'w') as config_file:
             config.write(config_file)
+
+    def load_favorites(self):
+        config = configparser.RawConfigParser()
+        config.read('config.ini')
+        if 'Favorites' in config:
+            favorites_json = config['Favorites'].get('Items', '')
+            if favorites_json:
+                try:
+                    self.favorites = json.loads(favorites_json)
+                except:
+                    self.favorites = {}
+            else:
+                self.favorites = {}
+
+    def save_favorites(self):
+        config = configparser.RawConfigParser()
+        config.read('config.ini')
+        if 'Favorites' not in config:
+            config['Favorites'] = {}
+        config['Favorites']['Items'] = json.dumps(self.favorites)
+        with open('config.ini', 'w') as config_file:
+            config.write(config_file)
+
+    def get_item_id(self, entry):
+        """Generate a unique identifier for an entry"""
+        if 'stream_id' in entry:
+            return f"{entry.get('stream_id')}_{entry.get('name', '')}"
+        elif 'series_id' in entry:
+            return f"series_{entry.get('series_id')}_{entry.get('name', '')}"
+        elif 'id' in entry:  # Episode
+            return f"episode_{entry.get('id')}_{entry.get('title', '')}"
+        else:
+            return f"unknown_{entry.get('name', '')}_{hash(str(entry))}"
+
+    def toggle_favorite(self, entry):
+        """Add or remove an entry from favorites"""
+        item_id = self.get_item_id(entry)
+        if item_id in self.favorites:
+            del self.favorites[item_id]
+            self.animate_progress(0, 100, f"Removed {entry.get('name', 'item')} from favorites")
+        else:
+            self.favorites[item_id] = entry
+            self.animate_progress(0, 100, f"Added {entry.get('name', 'item')} to favorites")
+        self.save_favorites()
+
+    def show_favorites(self):
+        list_widget = self.channel_list_favorites
+        list_widget.clear()
+        
+        if not self.favorites:
+            no_favs_item = QListWidgetItem("No favorites added yet")
+            no_favs_item.setFlags(no_favs_item.flags() & ~Qt.ItemIsSelectable & ~Qt.ItemIsEnabled)
+            list_widget.addItem(no_favs_item)
+            return
+        
+        items = []
+        for item_id, entry in self.favorites.items():
+            display_text = entry.get('name', 'Unnamed')
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.UserRole, entry)
+            item.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon))
+            items.append(item)
+        
+        items.sort(key=lambda x: x.text().lower())
+        for item in items:
+            list_widget.addItem(item)
 
     def on_epg_checkbox_toggled(self, state):
         # If EPG is checked after we already logged in and no EPG data loaded, start it now.
