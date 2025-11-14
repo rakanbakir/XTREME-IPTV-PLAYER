@@ -11,6 +11,7 @@ import html
 import os
 import ssl
 import urllib.request
+import warnings
 from PyQt5 import QtCore
 from PyQt5.QtWidgets import QToolTip
 from pathlib import Path
@@ -42,6 +43,9 @@ CUSTOM_USER_AGENT = (
     "Connection: Keep-Alive User-Agent: okhttp/5.0.0-alpha.2 "
     "Accept-Encoding: gzip, deflate"
 )
+
+# Suppress deprecation warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 def normalize_channel_name(name):
     name = name.lower().strip()
@@ -332,6 +336,9 @@ class IPTVPlayerApp(QMainWindow):
         self.load_external_player_command()
         self.load_favorites()
 
+        self.watch_later_dir = Path.home() / '.iptv' / 'watch_later'
+        os.makedirs(self.watch_later_dir, exist_ok=True)
+
         self.top_level_scroll_positions = {
             'LIVE': 0,
             'Movies': 0,
@@ -570,8 +577,7 @@ class IPTVPlayerApp(QMainWindow):
         self.info_tab_layout = QVBoxLayout(self.info_tab)
         self.result_display = QTextEdit(self.info_tab)
         self.result_display.setReadOnly(True)
-        default_font = QFont()
-        default_font.setPointSize(self.default_font_size)
+        default_font = QFont("Arial", self.default_font_size)
         self.result_display.setFont(default_font)
         self.info_tab_layout.addWidget(self.result_display)
         info_icon = self.style().standardIcon(QtWidgets.QStyle.SP_MessageBoxInformation)
@@ -731,8 +737,7 @@ class IPTVPlayerApp(QMainWindow):
                 font.setPointSize(value)
                 item.setFont(font)
 
-        font = QFont()
-        font.setPointSize(value)
+        font = QFont("Arial", value)
         self.result_display.setFont(font)
 
     def extract_credentials_from_m3u_plus_url(self, url):
@@ -811,19 +816,34 @@ class IPTVPlayerApp(QMainWindow):
             categories_url = f"{server}/player_api.php"
             live_response = self.make_request(http_method, categories_url, params, timeout=10)
             live_response.raise_for_status()
+            try:
+                live_data = live_response.json()
+            except ValueError:
+                self.animate_progress(self.progress_bar.value(), 100, "Invalid JSON response for live categories")
+                return
 
             params['action'] = 'get_vod_categories'
             movies_response = self.make_request(http_method, categories_url, params, timeout=10)
             movies_response.raise_for_status()
+            try:
+                movies_data = movies_response.json()
+            except ValueError:
+                self.animate_progress(self.progress_bar.value(), 100, "Invalid JSON response for movie categories")
+                return
 
             params['action'] = 'get_series_categories'
             series_response = self.make_request(http_method, categories_url, params, timeout=10)
             series_response.raise_for_status()
+            try:
+                series_data = series_response.json()
+            except ValueError:
+                self.animate_progress(self.progress_bar.value(), 100, "Invalid JSON response for series categories")
+                return
 
             self.groups = {
-                "LIVE": live_response.json(),
-                "Movies": movies_response.json(),
-                "Series": series_response.json(),
+                "LIVE": live_data,
+                "Movies": movies_data,
+                "Series": series_data,
             }
             self.server = server
             self.username = username
@@ -1851,7 +1871,7 @@ class IPTVPlayerApp(QMainWindow):
 
             if self.external_player_command:
                 user_agent = "AppleCoreMedia/1.0.0.20L563 (Apple TV; U; CPU OS 16_5 like Mac OS X; en_us)"
-                command = [self.external_player_command, '--user-agent=' + user_agent, stream_url]
+                command = [self.external_player_command, '--user-agent=' + user_agent, '--save-position-on-quit', '--watch-later-dir=' + str(self.watch_later_dir), stream_url]
 
                 if is_linux:
                     # Ensure the external player command is executable
@@ -1862,9 +1882,10 @@ class IPTVPlayerApp(QMainWindow):
                 subprocess.Popen(command)
             else:
                 self.animate_progress(0, 100, "No external player configured")
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Playback Error", f"Failed to start media player: {e}")
         except Exception as e:
-            print(f"Error playing channel: {e}")
-            self.animate_progress(0, 100, "Error playing channel")
+            QtWidgets.QMessageBox.warning(self, "Playback Error", f"Error playing channel: {e}")
 
 
 
@@ -2310,8 +2331,10 @@ class IPTVPlayerApp(QMainWindow):
         dialog.exec_()
 
 def main():
+    os.environ['QT_LOGGING_RULES'] = '*.warning=false'
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+    app.setFont(QFont("Arial", 10))
     player = IPTVPlayerApp()
     player.show()
     sys.exit(app.exec_())
