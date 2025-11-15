@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QLineEdit, QLabel, QPushButton,
     QListWidget, QWidget, QFileDialog, QCheckBox, QSizePolicy, QHBoxLayout,
     QDialog, QFormLayout, QDialogButtonBox, QTabWidget, QListWidgetItem,
-    QSpinBox, QMenu, QAction, QTextEdit, QSlider, QShortcut,
+    QSpinBox, QMenu, QAction, QTextEdit, QSlider, QShortcut, QSystemTrayIcon,
 )
 from PyQt5.QtCore import QDir
 
@@ -688,9 +688,38 @@ class IPTVPlayerApp(QMainWindow):
         self.playlist_progress_animation.setEasingCurve(QEasingCurve.InOutQuad)
 
         self.load_theme_preference()
-        self.load_default_credentials()
-
         self.load_debug_preference()
+
+        # System Tray
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon))
+        self.tray_icon.setToolTip("XTREME IPTV PLAYER")
+        tray_menu = QMenu()
+        show_action = QAction("Show", self)
+        show_action.triggered.connect(self.show)
+        tray_menu.addAction(show_action)
+        hide_action = QAction("Hide", self)
+        hide_action.triggered.connect(self.hide)
+        tray_menu.addAction(hide_action)
+        tray_menu.addSeparator()
+        play_pause_action = QAction("Play/Pause", self)
+        play_pause_action.triggered.connect(self.toggle_play_pause)
+        tray_menu.addAction(play_pause_action)
+        stop_action = QAction("Stop", self)
+        stop_action.triggered.connect(self.stop_playback)
+        tray_menu.addAction(stop_action)
+        mute_action = QAction("Mute", self)
+        mute_action.triggered.connect(self.toggle_mute)
+        tray_menu.addAction(mute_action)
+        tray_menu.addSeparator()
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(QApplication.instance().quit)
+        tray_menu.addAction(quit_action)
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self.on_tray_icon_activated)
+        self.tray_icon.show()
+
+        self.load_default_credentials()
 
         if self.debug:
             os.environ['QT_LOGGING_RULES'] = 'qt.*=true'
@@ -1036,6 +1065,7 @@ class IPTVPlayerApp(QMainWindow):
 
             # Playlist loading complete
             self.animate_progress(self.progress_bar.value(), 100, "Playlist loaded")
+            self.tray_icon.showMessage("Login Successful", f"Connected to {self.server}", QSystemTrayIcon.Information, 2000)
 
             # After playlist is fully loaded, if EPG is checked and not loaded, load EPG now
             if self.epg_checkbox.isChecked() and not self.epg_data:
@@ -1047,15 +1077,19 @@ class IPTVPlayerApp(QMainWindow):
         except requests.exceptions.Timeout:
             print("Request timed out")
             self.animate_progress(self.progress_bar.value(), 100, "Login timed out")
+            self.tray_icon.showMessage("Login Failed", "Request timed out", QSystemTrayIcon.Critical, 3000)
         except requests.RequestException as e:
             print(f"Network error: {e}")
             self.animate_progress(self.progress_bar.value(), 100, "Network Error")
+            self.tray_icon.showMessage("Login Failed", "Network Error", QSystemTrayIcon.Critical, 3000)
         except ValueError as e:
             print(f"JSON decode error: {e}")
             self.animate_progress(self.progress_bar.value(), 100, "Invalid server response")
+            self.tray_icon.showMessage("Login Failed", "Invalid server response", QSystemTrayIcon.Critical, 3000)
         except Exception as e:
             print(f"Error fetching categories: {e}")
             self.animate_progress(self.progress_bar.value(), 100, "Error fetching categories")
+            self.tray_icon.showMessage("Login Failed", str(e), QSystemTrayIcon.Critical, 3000)
 
     def fetch_additional_data(self, server, username, password):
         try:
@@ -1138,10 +1172,12 @@ class IPTVPlayerApp(QMainWindow):
 
         # EPG done
         self.animate_progress(self.progress_bar.value(), 100, "EPG data loaded")
+        self.tray_icon.showMessage("EPG Loaded", "Electronic Program Guide data loaded", QSystemTrayIcon.Information, 2000)
 
     def on_epg_error(self, error_message):
         print(f"Error fetching EPG data: {error_message}")
         self.animate_progress(self.progress_bar.value(), 100, "Error fetching EPG data")
+        self.tray_icon.showMessage("EPG Error", error_message, QSystemTrayIcon.Warning, 3000)
 
     def channel_item_double_clicked(self, item):
         try:
@@ -2072,10 +2108,14 @@ class IPTVPlayerApp(QMainWindow):
             if self.debug:
                 print("DEBUG: Playback started, switched to Player tab")
             
+            # Update tray tooltip
+            self.tray_icon.setToolTip(f"Now Playing: {entry.get('name', 'Unknown')}")
+            
         except Exception as e:
             if self.debug:
                 print(f"DEBUG: Error in play_channel: {e}")
             QtWidgets.QMessageBox.warning(self, "Playback Error", f"Error playing channel: {e}")
+            self.tray_icon.showMessage("Playback Error", str(e), QSystemTrayIcon.Critical, 3000)
 
     def toggle_play_pause(self):
         if self.media_player.state() == QMediaPlayer.PlayingState:
@@ -2085,6 +2125,7 @@ class IPTVPlayerApp(QMainWindow):
 
     def stop_playback(self):
         self.media_player.stop()
+        self.tray_icon.setToolTip("XTREME IPTV PLAYER")
 
     def rewind(self):
         current_pos = self.media_player.position()
@@ -2697,6 +2738,22 @@ class IPTVPlayerApp(QMainWindow):
         items.sort(key=lambda x: x.text().lower())
         for item in items:
             list_widget.addItem(item)
+
+    def on_tray_icon_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
+    def closeEvent(self, event):
+        event.ignore()
+        self.hide()
+        self.tray_icon.showMessage(
+            "XTREME IPTV PLAYER",
+            "Application minimized to tray",
+            QSystemTrayIcon.Information,
+            2000
+        )
 
     def on_epg_checkbox_toggled(self, state):
         # If EPG is checked after we already logged in and no EPG data loaded, start it now.
