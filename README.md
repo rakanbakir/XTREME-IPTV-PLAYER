@@ -17,6 +17,8 @@ This IPTV player, built with Python and PyQt5, supports M3U_plus playlists and X
 - **External Player Support:** Play channels using VLC.
 - **Xtream Codes API:** Log in with Xtream credentials and dynamically load content.
 - **Series Navigation:** Access series categories and specific episodes.
+- **Resume Playback:** Automatically resume movies and series from where you left off.
+- **Performance Improvements:** Optimized loading times and improved error handling.
 - **Error Handling:** Graceful handling of loading issues.
 - **Recommended Player:** For optimal performance, use VLC media player. Download it at: https://www.videolan.org/vlc/
 - **Recommended Player:** For optimal performance, use SMPlayer player. Download it at: https://www.smplayer.info
